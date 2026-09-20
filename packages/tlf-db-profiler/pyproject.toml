@@ -1,0 +1,6 @@
+[project]
+name = "tlf-db-profiler"
+version = "0.0.0"
+description = "Planned - not yet started."
+requires-python = ">=3.10"
+dependencies = []

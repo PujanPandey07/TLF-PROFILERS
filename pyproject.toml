@@ -1,0 +1,8 @@
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[project]
+name = "tlf-profilers"
+version = "0.0.0"
+description = "Monorepo for TLF's three civic-data profilers: regional/demographic, disaster/amenity, and database."
+requires-python = ">=3.10"
