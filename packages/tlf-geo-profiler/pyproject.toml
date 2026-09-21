@@ -21,3 +21,6 @@ packages = ["src/tlf_geo_profiler"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/tlf_geo_profiler/data/wards.parquet" = "tlf_geo_profiler/data/wards.parquet"
+"src/tlf_geo_profiler/data/provinces.parquet" = "tlf_geo_profiler/data/provinces.parquet"
+"src/tlf_geo_profiler/data/districts.parquet" = "tlf_geo_profiler/data/districts.parquet"
+"src/tlf_geo_profiler/data/local_levels.parquet" = "tlf_geo_profiler/data/local_levels.parquet"

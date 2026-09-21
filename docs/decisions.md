@@ -20,7 +20,7 @@ context from getting lost between sessions.
   real and tested** - spatial-index point-in-polygon lookup (geopandas
   `sindex`), verified against Kathmandu, Pokhara, and remote Humla
   coordinates, ~3ms per lookup.
-- **Known limitation, not yet solved**: the ward file only carries
+- **Known limitation (resolved - see next entry)**: the ward file only carries
   ward name/number - no district or province. Ward names CANNOT be
   string-parsed to get the municipality's district (confirmed: 143
   municipality names, e.g. "Kalika", are reused across different,
@@ -30,6 +30,34 @@ context from getting lost between sessions.
   complete, to keep one consistent data source rather than mixing in
   HDX's COD-AB dataset and risking boundary-edge mismatches between
   two different sources at the same coordinate.
+- **Province / district / local level: CONFIRMED - same OSM source, resolved
+  spatially** (2026-09-21). Overpass exports for admin_level 4/6/7 checked
+  against the ward layer: 7/7 provinces and 77/77 districts complete; every
+  ward's representative point falls inside exactly one province and one
+  district (0 orphans, 0 multi-matches), so there is no seam between sources
+  to worry about and HDX COD-AB is not needed. Bundled as
+  `data/{provinces,districts,local_levels}.parquet`, built reproducibly by
+  `scripts/build_admin_layers.py`. `resolve_admin_unit()` now returns
+  province, district, local level (+ type) and ward.
+- **4 local levels are missing from the level-7 export** (749 of 753):
+  Butwal, Nepalgunj, Duduwa, Sainamaina. Found because 57 wards had no
+  containing local-level polygon; the ward-name prefixes of exactly those
+  57 wards are these four names (Banke + Rupandehi). Interim fix: polygons
+  dissolved from their wards, flagged `local_level_source="derived_from_wards"`,
+  `local_level_type=None`. Replace with the real OSM relations once exported
+  (their tags/admin_level probably differ from the rest, which is why the
+  export query missed them).
+- **Ward layer covers ~92% of land area, local-level ~96%, district 100%**
+  (20k random points inside Nepal). Gaps cluster in Dolpa, Parsa, Bardiya,
+  Chitwan, Sankhuwasabha - consistent with protected areas OSM does not
+  assign to a ward. `resolve_admin_unit()` therefore degrades to
+  province+district (ward/local level = None) instead of raising; it only
+  raises for points outside Nepal.
+- **OSM local levels carry no official code** (no CBS/LGD id; wikidata on
+  only ~120 of 749) and names repeat (Bagmati x3, Sunkoshi x3, Kalika x2,
+  ...). Joining census data to a local level cannot be done on OSM ids
+  alone - needs a crosswalk table (name + district) from the CBS side.
+  `AdminUnit.local_level_code` stays None until that exists.
 - **Postal codes**: not in OSM as polygon data. Nepal Post publishes a
   flat district-level code list - join by district, not by point-in-polygon.
 - **Open**: how much demographic depth to return by default (population
