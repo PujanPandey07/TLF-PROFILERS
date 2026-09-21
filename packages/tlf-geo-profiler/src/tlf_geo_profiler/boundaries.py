@@ -25,8 +25,10 @@ local_level_source="derived_from_wards". See scripts/build_admin_layers.py.
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
+import re
 
 import geopandas as gpd
+import pandas as pd
 from shapely.geometry import Point
 
 _LAYERS = ("provinces", "districts", "local_levels", "wards")
@@ -50,6 +52,39 @@ class AdminUnit:
     postal_code: str | None = None
 
 
+def _with_ward_numbers(wards: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Add an integer `ward_no` column.
+
+    The raw OSM `ward` tag is right for 6,725 of 6,738 wards. The other 13 are
+    OSM tagging errors (superscript digits, typos like 1433, or a number that
+    duplicates a sibling ward). Those are corrected from
+    data/ward_number_fixes.csv, each with the reason. Anything still not a
+    plain integer falls back to the number at the end of the ward name.
+    """
+    wards = wards.copy()
+    tag = wards["ward"].astype("string")
+    ward_no = pd.to_numeric(
+        tag.where(tag.str.fullmatch(r"\d+")), errors="coerce")
+
+    with resources.as_file(
+        resources.files("tlf_geo_profiler").joinpath(
+            "data/ward_number_fixes.csv")
+    ) as path:
+        fixes = pd.read_csv(path).set_index("osm_id")["ward_no"]
+    ward_no = ward_no.where(~wards["osm_id"].isin(
+        fixes.index), wards["osm_id"].map(fixes))
+
+    def from_name(name: str):
+        m = re.search(r"(\d+)\s*$", str(name)
+                      ) or re.match(r"^\s*(\d+)\s*,", str(name))
+        return int(m.group(1)) if m else pd.NA
+
+    missing = ward_no.isna()
+    ward_no[missing] = wards.loc[missing, "name"].map(from_name)
+    wards["ward_no"] = ward_no.astype("Int64")
+    return wards
+
+
 @lru_cache(maxsize=None)
 def _load(layer: str) -> gpd.GeoDataFrame:
     """Load a bundled boundary layer once per process."""
@@ -58,7 +93,8 @@ def _load(layer: str) -> gpd.GeoDataFrame:
     with resources.as_file(
         resources.files("tlf_geo_profiler").joinpath(f"data/{layer}.parquet")
     ) as path:
-        return gpd.read_parquet(path)
+        gdf = gpd.read_parquet(path)
+    return _with_ward_numbers(gdf) if layer == "wards" else gdf
 
 
 def _lookup(layer: str, lat: float, lon: float):
@@ -89,7 +125,12 @@ def resolve_ward(lat: float, lon: float) -> dict | None:
     row = _lookup("wards", lat, lon)
     if row is None:
         return None
-    return {"osm_id": row["osm_id"], "name": row["name"], "ward": row["ward"]}
+    return {
+        "osm_id": row["osm_id"],
+        "name": row["name"],
+        "ward": row["ward"],  # raw OSM tag, kept for compatibility
+        "ward_no": int(row["ward_no"]),  # corrected integer, use this
+    }
 
 
 def resolve_admin_unit(lat: float, lon: float) -> AdminUnit:
@@ -111,9 +152,7 @@ def resolve_admin_unit(lat: float, lon: float) -> AdminUnit:
         raise ValueError(
             f"({lat}, {lon}) is outside all known Nepal boundaries")
 
-    ward_no = None
-    if ward is not None and _clean(ward["ward"]) is not None:
-        ward_no = int(ward["ward"])
+    ward_no = int(ward["ward_no"]) if ward is not None else None
 
     return AdminUnit(
         province=_clean(province["name_en"]) if province is not None else None,

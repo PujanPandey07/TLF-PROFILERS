@@ -28,3 +28,22 @@ Rebuild the boundary layers with `scripts/build_admin_layers.py`.
 - `scripts/build_admin_layers.py` - Overpass GeoJSON -> bundled GeoParquet
 - `demographics.py` - admin unit -> demographic stats (meant to reuse tlf-core)
 - `profiler.py` - public `profile(lat, lon)` entry point
+
+## Known limitations of the data (OpenStreetMap)
+
+- **4 local levels are derived, not taken from OSM:** Butwal, Nepalgunj,
+  Duduwa and Sainamaina were missing from the level-7 export. Their shapes
+  are built by merging their wards and marked
+  `local_level_source="derived_from_wards"`, with no local-level type. A
+  later query found real OSM outlines for Butwal and Sainamaina, identical
+  to the derived shapes. None was found for Nepalgunj or Duduwa.
+- **5 wards are missing from OSM:** Nepalgunj-15, Pyuthan-2, Sarumarani-1,
+  Nisikhola-7 and Nisikhola-8. A point there resolves to its local level
+  with `ward=None`.
+- **About 8% of Nepal's land has no ward polygon** (mostly protected
+  areas). Such points resolve to province and district only, and
+  sometimes local level.
+- **13 wards have wrong ward numbers in OSM** (typos, superscript digits,
+  duplicates). They are corrected in `data/ward_number_fixes.csv`.
+- **No official codes:** OSM local levels carry no CBS/LGD code, and names
+  repeat across districts, so census data can't be joined by name alone.

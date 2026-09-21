@@ -114,3 +114,46 @@ def test_every_ward_lands_in_a_local_level_district_and_province():
             name)[["geometry"]], predicate="within", how="left")
         joined = joined.drop_duplicates("osm_id")
         assert joined["index_right"].notna().all(), f"wards outside {name}"
+
+
+# --- ward-number corrections ------------------------------------------------
+
+
+def _point_in_ward(osm_id):
+    wards = _layer("wards")
+    p = wards[wards["osm_id"] ==
+              osm_id].geometry.iloc[0].representative_point()
+    return p.y, p.x
+
+
+@pytest.mark.parametrize(
+    "osm_id, expected",
+    [
+        ("relation/16127854", 15),  # Hetauda-15, ward tag was superscript '⁵'
+        ("relation/6667491", 1),  # Yangwarak-01, ward tag was superscript '¹'
+        ("relation/6079233", 1),  # Bungdikali-01, ward tag was 1433
+        ("relation/7594658", 10),  # Bode Parsain-10, ward tag was 19
+    ],
+)
+def test_mistagged_wards_resolve_without_crashing(osm_id, expected):
+    unit = resolve_admin_unit(*_point_in_ward(osm_id))
+    assert unit.ward == expected
+
+
+def test_ward_numbers_unique_within_each_local_level():
+    """Catches a bad ward tag that duplicates a sibling's number."""
+    import geopandas as gpd
+
+    wards = _layer("wards")
+    pts = gpd.GeoDataFrame(
+        {"osm_id": wards["osm_id"], "ward_no": wards["ward_no"]},
+        geometry=wards.representative_point(),
+        crs=wards.crs,
+    )
+    lls = _layer("local_levels").reset_index().rename(columns={"index": "ll"})
+    joined = gpd.sjoin(pts, lls[["ll", "geometry"]],
+                       predicate="within", how="inner")
+    joined = joined.drop_duplicates("osm_id")
+    dupes = joined[joined.duplicated(["ll", "ward_no"], keep=False)]
+    assert dupes.empty, dupes[["osm_id", "ward_no"]].to_string()
+    assert wards["ward_no"].notna().all()

@@ -58,6 +58,21 @@ context from getting lost between sessions.
   ...). Joining census data to a local level cannot be done on OSM ids
   alone - needs a crosswalk table (name + district) from the CBS side.
   `AdminUnit.local_level_code` stays None until that exists.
+- **What is missing / wrong in the OSM data, audited 2026-09-21** (ward
+  numbers checked per local level for gaps and duplicates):
+  - 4 local levels absent from the level-7 export (see above).
+  - 5 ward polygons missing (6,743 official - 6,738): numbering gaps at
+    Nepalgunj-15, Pyuthan-2, Sarumarani-1 and Nisikhola-7/8. The first three
+    leave a single hole of one-ward size inside their local level. Nisikhola
+    does not fit: its 7 wards tile the whole local level with numbers
+    1-6 and 9, so check it in OSM directly. A point in a hole resolves to
+    local level with ward=None.
+  - 13 wards with a wrong `ward` tag (superscript digits, 1433, 19, or a
+    number duplicating a sibling). `resolve_admin_unit()` used to crash on
+    the two superscript ones (int() ValueError, indistinguishable from
+    "outside Nepal"). Now `ward_no` is corrected from
+    `data/ward_number_fixes.csv`, with a reason per row - these are also
+    fixable upstream in OSM.
 - **Postal codes**: not in OSM as polygon data. Nepal Post publishes a
   flat district-level code list - join by district, not by point-in-polygon.
 - **Open**: how much demographic depth to return by default (population

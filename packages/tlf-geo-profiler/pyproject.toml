@@ -24,3 +24,4 @@ packages = ["src/tlf_geo_profiler"]
 "src/tlf_geo_profiler/data/provinces.parquet" = "tlf_geo_profiler/data/provinces.parquet"
 "src/tlf_geo_profiler/data/districts.parquet" = "tlf_geo_profiler/data/districts.parquet"
 "src/tlf_geo_profiler/data/local_levels.parquet" = "tlf_geo_profiler/data/local_levels.parquet"
+"src/tlf_geo_profiler/data/ward_number_fixes.csv" = "tlf_geo_profiler/data/ward_number_fixes.csv"
