@@ -9,14 +9,33 @@ context from getting lost between sessions.
 - **Monorepo, not 3 separate repos** (2026-09-20): profilers share
   dependencies and Profiler 2 consumes Profiler 1 directly; splitting
   now would mean version-pinning overhead on code that isn't stable yet.
-- **Boundary source**: OSM Nepal is the working candidate. Province/
-  district/local-level (admin_level 4/6/7) look reasonably complete;
-  ward-level (admin_level 9/10) coverage is unconfirmed and likely
-  patchy outside major cities - needs an Overpass check before committing.
+- **Ward boundary source: CONFIRMED - OpenStreetMap Nepal** (2026-09-21).
+  Verified via a live Overpass query: 6,738 of Nepal's official 6,743
+  wards (99.93%) exist as real admin_level=9 polygon relations with
+  ward number + name, including remote areas (Simkot, Humla). Exported
+  as GeoJSON, cleaned (14 invalid geometries repaired with buffer(0),
+  0 lost), converted to GeoParquet (133MB -> 18.7MB, zstd compression),
+  bundled into the package at `data/wards.parquet`.
+- **`resolve_ward()` and `resolve_admin_unit()` in `boundaries.py` are
+  real and tested** - spatial-index point-in-polygon lookup (geopandas
+  `sindex`), verified against Kathmandu, Pokhara, and remote Humla
+  coordinates, ~3ms per lookup.
+- **Known limitation, not yet solved**: the ward file only carries
+  ward name/number - no district or province. Ward names CANNOT be
+  string-parsed to get the municipality's district (confirmed: 143
+  municipality names, e.g. "Kalika", are reused across different,
+  unrelated districts). District/province/municipality need their own
+  boundary layer, resolved spatially the same way - candidate: check
+  whether OSM's higher admin levels (admin_level 4/6/7) are similarly
+  complete, to keep one consistent data source rather than mixing in
+  HDX's COD-AB dataset and risking boundary-edge mismatches between
+  two different sources at the same coordinate.
 - **Postal codes**: not in OSM as polygon data. Nepal Post publishes a
   flat district-level code list - join by district, not by point-in-polygon.
 - **Open**: how much demographic depth to return by default (population
-  count only vs. full CBS breakdown via tlf-core's existing vocabulary).
+  count only vs. full CBS breakdown via tlf-core's existing vocabulary);
+  also unconfirmed whether CBS publishes population data down to ward
+  level or only to municipality level.
 
 ## tlf-disaster-profiler
 
