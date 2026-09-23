@@ -30,8 +30,53 @@ import re
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Point
+from tlf_geo import GeoResolver
 
 _LAYERS = ("provinces", "districts", "local_levels", "wards")
+
+
+@lru_cache(maxsize=1)
+def _get_resolver() -> GeoResolver:
+    return GeoResolver()
+
+
+@lru_cache(maxsize=1)
+def _load_postal_codes():
+    """Load and index ward-level and local-level postal codes."""
+    ward_postal = {}
+    with resources.as_file(
+        resources.files("tlf_geo_profiler").joinpath(
+            "data/nepal_postal_codes_ward_level.csv"
+        )
+    ) as path:
+        df_w = pd.read_csv(
+            path,
+            dtype={"local_level_code": str, "ward_number": int, "postal_code": str},
+        )
+        for _, row in df_w.iterrows():
+            code = row["local_level_code"]
+            wn = row["ward_number"]
+            pc = row["postal_code"]
+            if pd.notna(code) and pd.notna(wn) and pd.notna(pc):
+                ward_postal[(str(code).strip(), int(wn))] = str(pc).strip()
+
+    local_postal = {}
+    with resources.as_file(
+        resources.files("tlf_geo_profiler").joinpath(
+            "data/nepal_postal_codes_local_level.csv"
+        )
+    ) as path:
+        df_l = pd.read_csv(
+            path,
+            dtype={"local_level_code": str, "postal_code_local_level": str},
+        )
+        for _, row in df_l.iterrows():
+            code = row["local_level_code"]
+            pc = row["postal_code_local_level"]
+            if pd.notna(code) and pd.notna(pc):
+                local_postal[str(code).strip()] = str(pc).strip()
+
+    return ward_postal, local_postal
 
 
 @dataclass(frozen=True)
@@ -152,19 +197,41 @@ def resolve_admin_unit(lat: float, lon: float) -> AdminUnit:
         raise ValueError(
             f"({lat}, {lon}) is outside all known Nepal boundaries")
 
+    local_name = _clean(local["name_en"]) if local is not None else None
+    district_name = _clean(district["name_en"]) if district is not None else None
     ward_no = int(ward["ward_no"]) if ward is not None else None
+
+    local_level_code = None
+    postal_code = None
+
+    if local_name is not None:
+        try:
+            resolver = _get_resolver()
+            res = resolver.resolve(local_name, district=district_name)
+            local_level_code = str(res["code"])
+        except Exception:
+            local_level_code = None
+
+    if local_level_code is not None:
+        ward_postal, local_postal = _load_postal_codes()
+        if ward_no is not None and (local_level_code, ward_no) in ward_postal:
+            postal_code = ward_postal[(local_level_code, ward_no)]
+        elif local_level_code in local_postal:
+            postal_code = local_postal[local_level_code]
 
     return AdminUnit(
         province=_clean(province["name_en"]) if province is not None else None,
         province_code=_clean(province["iso_code"]
                              ) if province is not None else None,
-        district=_clean(district["name_en"]) if district is not None else None,
-        local_level=_clean(local["name_en"]) if local is not None else None,
+        district=district_name,
+        local_level=local_name,
         local_level_type=_clean(local["kind"]) if local is not None else None,
         local_level_osm_id=_clean(
             local["osm_id"]) if local is not None else None,
         local_level_source=_clean(
             local["source"]) if local is not None else None,
+        local_level_code=local_level_code,
         ward=ward_no,
         ward_osm_id=ward["osm_id"] if ward is not None else None,
+        postal_code=postal_code,
     )

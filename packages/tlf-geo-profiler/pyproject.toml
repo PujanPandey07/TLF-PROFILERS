@@ -2,15 +2,31 @@
 name = "tlf-geo-profiler"
 version = "0.1.0"
 description = "Coordinate -> Nepal administrative unit + demographic profile"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+# TODO before publishing: fill in real maintainer/org info - this is what
+# shows as "Maintainers" on the PyPI project page.
+# authors = [{ name = "Your Org", email = "team@example.com" }]
 dependencies = [
     "shapely>=2.0",
     "geopandas>=1.0",
     "pyarrow>=15.0",
+    "tlf-geo~=0.1.0",
+    "build>=1.6.1",
+    "twine>=7.0.0",
+    "pytest>=9.1.1",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/PujanPandey07/TLF-PROFILERS"
+Repository = "https://github.com/PujanPandey07/TLF-PROFILERS"
+Source = "https://github.com/PujanPandey07/TLF-PROFILERS/tree/main/packages/tlf-geo-profiler"
+Issues = "https://github.com/PujanPandey07/TLF-PROFILERS/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -25,3 +41,6 @@ packages = ["src/tlf_geo_profiler"]
 "src/tlf_geo_profiler/data/districts.parquet" = "tlf_geo_profiler/data/districts.parquet"
 "src/tlf_geo_profiler/data/local_levels.parquet" = "tlf_geo_profiler/data/local_levels.parquet"
 "src/tlf_geo_profiler/data/ward_number_fixes.csv" = "tlf_geo_profiler/data/ward_number_fixes.csv"
+"src/tlf_geo_profiler/data/nepal_postal_codes_local_level.csv" = "tlf_geo_profiler/data/nepal_postal_codes_local_level.csv"
+"src/tlf_geo_profiler/data/nepal_postal_codes_ward_level.csv" = "tlf_geo_profiler/data/nepal_postal_codes_ward_level.csv"
+"src/tlf_geo_profiler/data/demographics_ward.csv" = "tlf_geo_profiler/data/demographics_ward.csv"
