@@ -48,10 +48,13 @@ def _run_query(ql, timeout=30):
     raise RuntimeError(f"all Overpass endpoints failed: {last_error}")
 
 
-def safe_query(category_key, ql, parse_fn):
-    """Never raises — turns any failure into a structured 'failed' result."""
+def safe_query(category_key, ql, parse_fn, timeout=30):
+    """Never raises — turns any failure into a structured 'failed' result.
+    timeout is the HTTP request timeout in seconds; it must be >= the
+    [timeout:N] value baked into the Overpass QL itself, or we'll abort the
+    request client-side before Overpass even gets a chance to respond."""
     try:
-        raw = _run_query(ql)
+        raw = _run_query(ql, timeout=timeout)
         return {"status": "ok", "category": category_key, **parse_fn(raw)}
     except Exception as e:
         return {"status": "failed", "category": category_key, "reason": str(e)}
@@ -85,23 +88,45 @@ def named_query(area, category_key, osm_filter):
     return safe_query(category_key, ql, parse)
 
 
+def river_geometries(area):
+    """Named rivers as full polylines (out geom) rather than a single centroid point,
+    so the report can draw the actual river course on the map instead of a dot."""
+    loc = _area_filter(area)
+    ql = f'[out:json][timeout:25];(way["waterway"="river"]{loc};);out geom;'
+
+    def parse(raw):
+        rivers = []
+        for el in raw["elements"]:
+            if el.get("type") != "way" or "geometry" not in el:
+                continue
+            name = el.get("tags", {}).get("name", "unnamed")
+            coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
+            rivers.append({"name": name, "coords": coords})
+        return {"items": rivers, "count": len(rivers)}
+
+    return safe_query("river_geometries", ql, parse)
+
+
 def flood_context(area):
-    """Nearby rivers/lakes/dams, deduped by name (OSM has River/Nadi/case variants)."""
-    result = named_query(area, "flood_context", '["waterway"="river"]')
+    """Nearby rivers, deduped by name (OSM has River/Nadi/case variants). A single
+    named river is usually split across many OSM ways, so segments belonging to the
+    same name are grouped under one entry: {"name": ..., "segments": [[(lat,lon),...],...]}."""
+    result = river_geometries(area)
     if result["status"] != "ok":
         return result
 
-    seen = set()
-    deduped = []
+    merged = {}
+    order = []
     for item in result["items"]:
         key = item["name"].lower().replace(
             " river", "").replace(" nadi", "").strip()
-        if key not in seen:
-            seen.add(key)
-            deduped.append(item)
+        if key not in merged:
+            merged[key] = {"name": item["name"], "segments": []}
+            order.append(key)
+        merged[key]["segments"].append(item["coords"])
 
-    result["items"] = deduped
-    result["count"] = len(deduped)
+    result["items"] = [merged[k] for k in order]
+    result["count"] = len(result["items"])
     return result
 
 
@@ -130,8 +155,46 @@ def query_disaster_area(area, area_km2, event_type):
     for key, result in categories.items():
         if result["status"] == "ok":
             result["confidence"] = confidence_label(
-                result["count"], area_km2, key)
+                result.get("count", 0), area_km2, key)
         else:
             result["confidence"] = "unknown"
 
     return categories
+
+
+# ---------- Standalone detail functions ----------
+# Heavier "out geom" queries, kept OUT of the default report path (query_disaster_area)
+# because full-detail dumps for buildings/roads can time out on dense urban areas or
+# large radii — the same limitation already found during design (see README). These are
+# meant to be called directly by a user who wants to drill into one specific area, or by
+# report.py's optional include_detail_layers=True path (opt-in, off by default).
+
+def _way_geometries(area, category_key, osm_filter, timeout=45):
+    loc = _area_filter(area)
+    ql = f'[out:json][timeout:{timeout}];(way{osm_filter}{loc};);out geom;'
+
+    def parse(raw):
+        items = []
+        for el in raw["elements"]:
+            if el.get("type") != "way" or "geometry" not in el:
+                continue
+            name = el.get("tags", {}).get("name", "unnamed")
+            coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
+            items.append(
+                {"name": name, "coords": coords, "osm_id": el.get("id")})
+        return {"items": items, "count": len(items)}
+
+    # +10s margin so the HTTP client outlives the Overpass-side timeout above
+    return safe_query(category_key, ql, parse, timeout=timeout + 10)
+
+
+def get_building_geometries(area):
+    """Standalone: full building footprints for one alert area, independent of build_report().
+    Can time out on dense urban areas or large radii — try a smaller radius/polygon if it fails."""
+    return _way_geometries(area, "building_geometries", '["building"]')
+
+
+def get_road_geometries(area):
+    """Standalone: full road polylines for one alert area, independent of build_report().
+    Same timeout caveat as get_building_geometries."""
+    return _way_geometries(area, "road_geometries", '["highway"]')

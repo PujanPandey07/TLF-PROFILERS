@@ -1,21 +1,20 @@
-# test_report.py
 import time
 from report import build_report, render_html
 
-SAMPLE_CIRCLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+SAMPLE_LANDSLIDE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
-  <identifier>EQ1567678</identifier>
-  <sender>gdacs@jrc.ec.europa.eu</sender>
-  <sent>2026-09-23T14:41:02+00:00</sent>
+  <identifier>LS0004521</identifier>
+  <sender>dhm.gov.np</sender>
+  <sent>2026-09-25T09:15:00+00:00</sent>
   <info>
-    <event>Earthquake</event>
-    <urgency>Immediate</urgency>
-    <severity>Moderate</severity>
-    <certainty>Observed</certainty>
-    <headline>Green earthquake alert (Magnitude 5.7M, Depth:10km)</headline>
+    <event>Landslide</event>
+    <urgency>Expected</urgency>
+    <severity>Severe</severity>
+    <certainty>Likely</certainty>
+    <headline>Landslide warning, Sindhupalchok district (Sunkoshi corridor)</headline>
     <area>
-      <areaDesc>10km around epicenter, Kathmandu Valley</areaDesc>
-      <circle>27.7040,85.3070 10</circle>
+      <areaDesc>3km around Jure area, Sindhupalchok</areaDesc>
+      <circle>27.9520,85.6810 3</circle>
     </area>
   </info>
 </alert>
@@ -23,12 +22,14 @@ SAMPLE_CIRCLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 
 WARDS_PARQUET_PATH = r"C:\Users\Dell\Downloads\tlf-profilers\tlf-profilers\packages\tlf-geo-profiler\src\tlf_geo_profiler\data\wards.parquet"
 
-print("Starting build_report...", flush=True)
+print("Starting build_report (landslide)...", flush=True)
 t0 = time.time()
-report, wards_gdf = build_report(SAMPLE_CIRCLE_XML, WARDS_PARQUET_PATH)
+# Landslide gets landslide_context: roads within the alert area + a 100m buffer,
+# drawn on the map in a distinct color and listed as "potentially affected".
+report, wards_gdf = build_report(SAMPLE_LANDSLIDE_XML, WARDS_PARQUET_PATH)
 print(f"build_report finished in {time.time()-t0:.1f}s", flush=True)
 
-with open("test_report_output.html", "w", encoding="utf-8") as f:
+with open("test_landslide_output.html", "w", encoding="utf-8") as f:
     f.write(render_html(report, wards_gdf))
 
-print("Report written to test_report_output.html")
+print("Report written to test_landslide_output.html")
