@@ -2,15 +2,44 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Point, Polygon, LineString
 
-from tlf_geo_profiler.boundaries import resolve_admin_unit
-from tlf_geo_profiler.demographics import get_demographics
-
 UTM_CRS = "EPSG:32645"
 WGS84_CRS = "EPSG:4326"
 
 
-def load_ward_boundaries(parquet_path):
-    """Load the bundled wards.parquet and reproject to UTM for area/coverage math."""
+def _default_wards_parquet_path():
+    """Locate tlf-geo-profiler's bundled wards.parquet automatically, so callers
+    don't need to know or hardcode that path themselves."""
+    try:
+        from importlib.resources import files
+    except ImportError as e:  # pragma: no cover - py<3.9 fallback, not expected here
+        raise ImportError(
+            "importlib.resources.files is unavailable on this Python version; "
+            "pass wards_parquet_path explicitly instead."
+        ) from e
+
+    try:
+        path = files("tlf_geo_profiler") / "data" / "wards.parquet"
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "tlf-geo-profiler isn't installed, so the ward boundary data can't be "
+            "found automatically. Install it, or pass wards_parquet_path explicitly."
+        ) from e
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Expected tlf-geo-profiler's bundled ward data at {path}, but it "
+            "wasn't found there. Pass wards_parquet_path explicitly instead."
+        )
+    return str(path)
+
+
+def load_ward_boundaries(parquet_path=None):
+    """Load the bundled wards.parquet and reproject to UTM for area/coverage math.
+    If parquet_path is omitted, it's resolved automatically from the installed
+    tlf-geo-profiler package — pass it explicitly to override (e.g. testing
+    against a different boundary file)."""
+    if parquet_path is None:
+        parquet_path = _default_wards_parquet_path()
     wards = gpd.read_parquet(parquet_path)
     return wards.to_crs(UTM_CRS)
 
@@ -33,7 +62,13 @@ def cap_area_to_geometry(area):
 def find_affected_wards(wards_gdf, cap_geometry):
     """Intersect the alert shape against every ward, then resolve each touched
     ward's admin unit + population through tlf-geo-profiler's own corrected
-    lookups (rather than trusting wards.parquet's raw, sometimes-wrong 'ward' tag)."""
+    lookups (rather than trusting wards.parquet's raw, sometimes-wrong 'ward' tag).
+    Imported here, not at module level, so the rest of this module (buffered_area,
+    flag_items_near_lines, bin_items_by_ward) stays testable without tlf-geo-profiler
+    installed."""
+    from tlf_geo_profiler.boundaries import resolve_admin_unit
+    from tlf_geo_profiler.demographics import get_demographics
+
     candidates = wards_gdf.iloc[wards_gdf.sindex.query(
         cap_geometry, predicate="intersects")]
 
@@ -53,8 +88,14 @@ def find_affected_wards(wards_gdf, cap_geometry):
         demo = get_demographics(admin.local_level_code, ward_no=admin.ward)
 
         population = demo.population  # may genuinely be None — resolver can silently miss
+        # ASSUMPTION: attribute is named `households`, mirroring `population` — adjust
+        # this one line if tlf_geo_profiler.demographics uses a different name.
+        households = getattr(demo, "households", None)
+
         population_affected = round(
             population * coverage_pct / 100) if population is not None else None
+        households_affected = round(
+            households * coverage_pct / 100) if households is not None else None
 
         results.append({
             "ward_osm_id": ward_row["osm_id"],
@@ -68,6 +109,9 @@ def find_affected_wards(wards_gdf, cap_geometry):
             "population": population,
             "population_affected": population_affected,
             "population_known": population is not None,
+            "households": households,
+            "households_affected": households_affected,
+            "households_known": households is not None,
         })
     return results
 
@@ -167,7 +211,7 @@ def flag_items_near_lines(items, line_segments_latlon, buffer_m):
         return items
 
     lines_gdf = gpd.GeoDataFrame(geometry=lines, crs=WGS84_CRS).to_crs(UTM_CRS)
-    risk_zone = lines_gdf.buffer(buffer_m).unary_union
+    risk_zone = lines_gdf.buffer(buffer_m).union_all()
 
     idxs = [i for i, _ in valid]
     pts = [Point(item["lon"], item["lat"]) for _, item in valid]

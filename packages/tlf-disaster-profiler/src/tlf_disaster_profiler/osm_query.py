@@ -12,11 +12,35 @@ HEADERS = {
 
 DENSITY_THRESHOLD_PER_KM2 = {
     "buildings": 5,
-    "amenities": 1,
     "roads": 0.5,
     "schools": 1,
     "hospitals": 0.2,
-    "emergency": 0.3,
+    "health_posts": 0.3,
+    "pharmacies": 0.5,
+    "police": 0.1,
+    "fire_stations": 0.05,
+    "shelters": 0.1,
+    "religious_sites": 1,
+    "marketplaces": 0.3,
+    "water_sources": 0.5,
+    "emergency_infra": 0.3,
+}
+
+# Every named, point-based amenity category queried as one combined Overpass
+# request (see named_amenities_query). (tag_key, tag_value) — tag_value=None
+# means "key present, any value" (used for emergency=*).
+NAMED_AMENITY_CATEGORIES = {
+    "schools": ("amenity", "school"),
+    "hospitals": ("amenity", "hospital"),
+    "health_posts": ("amenity", "clinic"),
+    "pharmacies": ("amenity", "pharmacy"),
+    "police": ("amenity", "police"),
+    "fire_stations": ("amenity", "fire_station"),
+    "shelters": ("amenity", "shelter"),
+    "religious_sites": ("amenity", "place_of_worship"),
+    "marketplaces": ("amenity", "marketplace"),
+    "water_sources": ("amenity", "drinking_water"),
+    "emergency_infra": ("emergency", None),
 }
 
 
@@ -130,6 +154,53 @@ def flood_context(area):
     return result
 
 
+def named_amenities_query(area):
+    """Every category in NAMED_AMENITY_CATEGORIES, fetched in ONE Overpass round
+    trip instead of one request per category — faster, and puts far less load on
+    the shared public mirrors than the old one-request-per-amenity approach.
+    Returns {category: {"status", "items", "count"}}, same shape as if each
+    category had been fetched with the old named_query() individually, so nothing
+    downstream (binning, rendering) needs to know the difference.
+    """
+    loc = _area_filter(area)
+    clauses = []
+    for key, value in NAMED_AMENITY_CATEGORIES.values():
+        tag_filter = f'["{key}"="{value}"]' if value is not None else f'["{key}"]'
+        clauses.append(f'node{tag_filter}{loc};')
+        clauses.append(f'way{tag_filter}{loc};')
+    ql = f'[out:json][timeout:25];({"".join(clauses)});out center tags;'
+
+    def matches(tags, key, value):
+        return (key in tags) if value is None else (tags.get(key) == value)
+
+    def parse(raw):
+        buckets = {cat: [] for cat in NAMED_AMENITY_CATEGORIES}
+        for el in raw.get("elements", []):
+            tags = el.get("tags", {})
+            for cat, (key, value) in NAMED_AMENITY_CATEGORIES.items():
+                if matches(tags, key, value):
+                    lat = el.get("lat") or el.get("center", {}).get("lat")
+                    lon = el.get("lon") or el.get("center", {}).get("lon")
+                    buckets[cat].append(
+                        {"name": tags.get("name", "unnamed"), "lat": lat, "lon": lon})
+                    break  # first matching category wins if an element has several tags
+        return buckets
+
+    combined = safe_query("named_amenities", ql, lambda raw: {
+                          "buckets": parse(raw)})
+    if combined["status"] != "ok":
+        # One combined failure becomes a per-category "failed" entry, so downstream
+        # code that expects one result dict per category doesn't need to change.
+        return {cat: {"status": "failed", "category": cat, "reason": combined["reason"]}
+                for cat in NAMED_AMENITY_CATEGORIES}
+
+    return {
+        cat: {"status": "ok", "category": cat,
+              "items": items, "count": len(items)}
+        for cat, items in combined["buckets"].items()
+    }
+
+
 def confidence_label(count, area_km2, category_key):
     """high/low/unknown, based on density vs a plausibility threshold — not a real count check."""
     if area_km2 <= 0:
@@ -144,9 +215,7 @@ def query_disaster_area(area, area_km2, event_type):
     categories = {
         "buildings": count_query(area, "buildings", '["building"]'),
         "roads": count_query(area, "roads", '["highway"]'),
-        "schools": named_query(area, "schools", '["amenity"="school"]'),
-        "hospitals": named_query(area, "hospitals", '["amenity"="hospital"]'),
-        "emergency": named_query(area, "emergency", '["emergency"]'),
+        **named_amenities_query(area),
     }
 
     if event_type == "Flood":

@@ -1,84 +1,72 @@
-"""Manual smoke test: exercise every public function against known points.
+import time
+from collections import Counter
 
-This is not a replacement for `pytest` - it doesn't assert anything, it just
-runs each public function and prints the result so you can eyeball it. Good
-for a quick "did I break the wiring" check, or for demoing the package.
+import requests
 
-Run from the package directory:
-    python scripts/smoke_test.py
-or from the monorepo root, inside the uv workspace:
-    uv run --package tlf-geo-profiler python packages/tlf-geo-profiler/scripts/smoke_test.py
-"""
+OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://lz4.overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter",
+]
 
-import json
-
-from tlf_geo_profiler import profile, profile_dict, profile_json
-from tlf_geo_profiler.boundaries import resolve_admin_unit, resolve_ward
-from tlf_geo_profiler.demographics import get_demographics
-
-# Known points, same ones covered by tests/test_profiler.py.
-SAMPLE_POINTS = {
-    "Kathmandu Durbar Square": (27.7040, 85.3070),
-    "Simkot, Humla (remote)": (29.9707, 81.8203),
-    "Pokhara Lakeside": (28.2096, 83.9560),
+HEADERS = {
+    "User-Agent": "tlf-disaster-profiler/0.1 (Pujan Pandey, github.com/PujanPandey07)",
 }
-OUTSIDE_NEPAL = ("Null Island (outside Nepal)", 0.0, 0.0)
 
 
-def _rule(title: str) -> None:
-    print(f"\n{'=' * 60}\n{title}\n{'=' * 60}")
+def _run_query(query, retries=2, delay_s=5):
+    last_error = None
+    for attempt in range(retries):
+        for endpoint in OVERPASS_ENDPOINTS:
+            try:
+                response = requests.post(
+                    endpoint, data={"data": query}, headers=HEADERS, timeout=120)
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                print(f"  [{endpoint}] attempt {attempt + 1} failed: {e}")
+                continue
+        if attempt < retries - 1:
+            time.sleep(delay_s)
+    raise last_error
 
 
-def main() -> None:
-    for label, (lat, lon) in SAMPLE_POINTS.items():
-        _rule(label)
+def _element_latlon(el):
+    """Nodes carry lat/lon directly. Ways only get a coordinate when the
+    query asks for 'center', which puts it under a 'center' sub-object."""
+    if el["type"] == "node":
+        return el["lat"], el["lon"]
+    center = el.get("center")
+    return (center["lat"], center["lon"]) if center else (None, None)
 
-        print(f"resolve_admin_unit({lat}, {lon}):")
-        admin_unit = resolve_admin_unit(lat, lon)
-        print(f"  {admin_unit}")
 
-        print(f"\nresolve_ward({lat}, {lon}):")
-        print(f"  {resolve_ward(lat, lon)}")
-
-        print(
-            f"\nget_demographics({admin_unit.local_level_code!r}, "
-            f"ward_no={admin_unit.ward!r}):"
-        )
-        print(f"  {get_demographics(admin_unit.local_level_code, ward_no=admin_unit.ward)}")
-
-        print(
-            f"\nget_demographics({admin_unit.local_level_code!r}) "
-            "[no ward - whole local level]:"
-        )
-        print(f"  {get_demographics(admin_unit.local_level_code)}")
-
-        print(f"\nprofile({lat}, {lon}):")
-        p = profile(lat, lon)
-        print(f"  {p}")
-
-        print("\np.to_dict():")
-        print(f"  {p.to_dict()}")
-
-        print("\np.to_json(indent=2):")
-        print(p.to_json(indent=2))
-
-        assert profile_dict(lat, lon) == p.to_dict(), "profile_dict() mismatch!"
-        assert profile_json(lat, lon) == p.to_json(), "profile_json() mismatch!"
-        print("\nprofile_dict() / profile_json() match .to_dict()/.to_json() - OK")
-
-    label, lat, lon = OUTSIDE_NEPAL
-    _rule(label)
-    print(f"profile({lat}, {lon}) is expected to raise ValueError:")
-    try:
-        profile(lat, lon)
-        print("  UNEXPECTED: did not raise!")
-    except ValueError as exc:
-        print(f"  raised ValueError as expected: {exc}")
-
-    _rule("Done")
-    print("If every section above printed sensible values and nothing")
-    print("raised an unexpected error or AssertionError, the wiring is intact.")
+def check_flood_context(lat, lon, radius_m=5000):
+    """Rivers, lakes, and flood-control structures near a point.
+    Prints results directly — this is a manual verification check,
+    not yet the final report-building function."""
+    where = f"(around:{radius_m},{lat},{lon})"
+    query = f"""
+    [out:json][timeout:60];
+    (
+      way["waterway"~"^(river|stream|canal)$"]{where};
+      way["natural"="water"]{where};
+      way["waterway"="dam"]{where};
+      node["waterway"="dam"]{where};
+    );
+    out tags center;
+    """
+    result = _run_query(query)
+    print(f"total found: {len(result['elements'])}")
+    for el in result["elements"]:
+        t = el["tags"]
+        kind = t.get("waterway") or t.get("natural")
+        name = t.get("name", "unnamed")
+        lat_, lon_ = _element_latlon(el)
+        print(f"  {kind:12s} {name:30s} ({lat_}, {lon_})")
 
 
 if __name__ == "__main__":
-    main()
+    # near the Bagmati/Manohara confluence, Kathmandu
+    check_flood_context(lat=27.6710, lon=85.4298, radius_m=5000)

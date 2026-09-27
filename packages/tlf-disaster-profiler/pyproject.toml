@@ -1,6 +1,36 @@
 [project]
 name = "tlf-disaster-profiler"
-version = "0.0.0"
-description = "Planned - not yet started."
+version = "0.1.1"
+description = "CAP-alert-driven disaster impact reports for Nepal: affected wards, population/household estimates, and hazard-specific infrastructure impact, built on tlf-geo-profiler."
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Pujan Pandey" },
+]
+dependencies = [
+    "requests>=2.31",
+    "geopandas>=0.14",
+    "shapely>=2.0",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "tlf-geo-profiler",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tlf_disaster_profiler"]
+
+# Resolves tlf-geo-profiler from the sibling package in this uv workspace instead
+# of PyPI. Remove this section (and adjust the dependency above to a real version
+# pin) if this is ever published somewhere tlf-geo-profiler isn't a workspace member.
+[tool.uv.sources]
+tlf-geo-profiler = { workspace = true }

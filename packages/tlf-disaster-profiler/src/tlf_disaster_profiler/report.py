@@ -1,10 +1,10 @@
 import json
-from cap import parse_cap
-from overlap import (
+from .cap import parse_cap
+from .overlap import (
     overlap_report, load_ward_boundaries, cap_area_to_geometry,
     bin_items_by_ward, buffered_area, flag_items_near_lines,
 )
-from osm_query import query_disaster_area, get_building_geometries, get_road_geometries
+from .osm_query import query_disaster_area, get_building_geometries, get_road_geometries, NAMED_AMENITY_CATEGORIES
 
 # Both agreed at 100m: how close counts as "at risk" for an amenity near a river,
 # and how far past the landslide alert's drawn edge to still check for roads.
@@ -12,8 +12,12 @@ RIVER_RISK_BUFFER_M = 100
 LANDSLIDE_ROAD_BUFFER_M = 100
 
 
-def build_report(cap_xml_text, wards_parquet_path, include_detail_layers=False):
+def build_report(cap_xml_text, wards_parquet_path=None, include_detail_layers=False):
     """Top-level entry point: raw CAP XML -> (report dict, wards_gdf). Never raises.
+
+    wards_parquet_path is optional: if omitted, ward boundary data is found
+    automatically from the installed tlf-geo-profiler package. Pass it explicitly
+    to override (e.g. testing against a different boundary file).
 
     include_detail_layers=False (default) keeps the report fast: buildings/roads stay
     as shape-wide counts only. Pass True to also fetch full building/road geometry as
@@ -67,7 +71,7 @@ def process_area(area, wards_gdf, event_type, include_detail_layers=False):
         if flood and flood["status"] == "ok":
             river_segments = [seg for river in flood["items"]
                               for seg in river["segments"]]
-            for cat in ("schools", "hospitals", "emergency"):
+            for cat in NAMED_AMENITY_CATEGORIES:
                 data = infrastructure.get(cat)
                 if data and data["status"] == "ok":
                     flag_items_near_lines(
@@ -86,10 +90,10 @@ def process_area(area, wards_gdf, event_type, include_detail_layers=False):
                 "reason": "could not buffer area geometry",
             }
 
-    # Bin point-based amenities (schools/hospitals/emergency) into the ward each one
-    # physically falls inside — a local spatial join, no extra Overpass calls — so the
-    # report can nest them under their ward instead of showing one flat list.
-    for cat in ("schools", "hospitals", "emergency"):
+    # Bin point-based amenities (every category in NAMED_AMENITY_CATEGORIES) into the
+    # ward each one physically falls inside — a local spatial join, no extra Overpass
+    # calls — so the report can nest them under their ward instead of one flat list.
+    for cat in NAMED_AMENITY_CATEGORIES:
         data = infrastructure.get(cat)
         if data and data["status"] == "ok":
             bin_items_by_ward(data["items"], wards_gdf)
@@ -109,6 +113,12 @@ def process_area(area, wards_gdf, event_type, include_detail_layers=False):
     wards_with_unknown_population = len(
         overlap["wards"]) - len(known_pop_wards)
 
+    known_hh_wards = [w for w in overlap["wards"] if w["households_known"]]
+    total_households_affected = sum(
+        w["households_affected"] for w in known_hh_wards)
+    wards_with_unknown_households = len(
+        overlap["wards"]) - len(known_hh_wards)
+
     return {
         "status": "ok",
         "area_desc": area["area_desc"],
@@ -119,6 +129,8 @@ def process_area(area, wards_gdf, event_type, include_detail_layers=False):
         "amenities_unassigned": unassigned,
         "total_population_affected": total_population_affected,
         "wards_with_unknown_population": wards_with_unknown_population,
+        "total_households_affected": total_households_affected,
+        "wards_with_unknown_households": wards_with_unknown_households,
         "infrastructure": infrastructure,
         "detail": detail,
     }
@@ -128,7 +140,7 @@ def _group_amenities_by_ward(infrastructure):
     """{'schools': {...items with ward_osm_id...}, ...} -> ({ward_osm_id: {cat: [items]}}, unassigned)."""
     by_ward = {}
     unassigned = {}
-    for cat in ("schools", "hospitals", "emergency"):
+    for cat in NAMED_AMENITY_CATEGORIES:
         data = infrastructure.get(cat)
         if not data or data["status"] != "ok":
             continue
@@ -172,14 +184,16 @@ def _badge(label):
 
 def _render_amenities_for_ward(ward_amenities):
     """Categorized dropdown: one summary line, expanding to a per-category dropdown
-    (Schools / Hospitals / Emergency), each expanding to its own item list. Kept out
-    of the ward-number cell so the ward table stays readable at a glance."""
+    (Schools / Hospitals / Health Posts / Pharmacies / Police / ...), each expanding
+    to its own item list. Kept out of the ward-number cell so the ward table stays
+    readable at a glance."""
     if not ward_amenities:
         return "<span style='color:#999;font-size:0.85em;'>&mdash;</span>"
 
     total = sum(len(items) for items in ward_amenities.values())
     cats_html = ""
     for cat, items in ward_amenities.items():
+        label = cat.replace("_", " ").title()
         rows = "".join(
             f"<li>{item['name']}"
             + (" <strong style='color:#e65100;'>&#9888; within "
@@ -189,7 +203,7 @@ def _render_amenities_for_ward(ward_amenities):
         )
         cats_html += f"""
         <details style="margin:2px 0 2px 12px;">
-          <summary style="cursor:pointer;">{cat.capitalize()} ({len(items)})</summary>
+          <summary style="cursor:pointer;">{label} ({len(items)})</summary>
           <ul style="margin:2px 0 0 0;padding-left:16px;font-size:0.85em;">{rows}</ul>
         </details>"""
 
@@ -213,7 +227,8 @@ def _render_ward_hierarchy(wards, by_ward):
             for l in order_l.get((p, d), []):
                 html += f"<details open style='margin:4px 0 4px 14px;'><summary>{l}</summary>"
                 html += "<table border='1' cellpadding='6' style='border-collapse:collapse;width:100%;margin:4px 0;'>"
-                html += "<tr><th>Ward</th><th>Coverage</th><th>Population</th><th>Est. Affected</th><th>Amenities</th></tr>"
+                html += ("<tr><th>Ward</th><th>Coverage</th><th>Population</th><th>Est. Pop. Affected</th>"
+                         "<th>Households</th><th>Est. HH Affected</th><th>Amenities</th></tr>")
                 for w in tree[p][d][l]:
                     amen_html = _render_amenities_for_ward(
                         by_ward.get(w["ward_osm_id"], {}))
@@ -223,6 +238,8 @@ def _render_ward_hierarchy(wards, by_ward):
                       <td>{w['coverage_pct']}%</td>
                       <td>{w['population'] if w['population_known'] else 'unknown'}</td>
                       <td>{w['population_affected'] if w['population_known'] else 'unknown'}</td>
+                      <td>{w['households'] if w['households_known'] else 'unknown'}</td>
+                      <td>{w['households_affected'] if w['households_known'] else 'unknown'}</td>
                       <td>{amen_html}</td>
                     </tr>"""
                 html += "</table></details>"
@@ -317,7 +334,7 @@ def _render_map(area, wards_gdf, map_id):
         center = json.dumps(list(shape["points"][0]))
 
     marker_js_parts = []
-    for cat in ("schools", "hospitals", "emergency"):
+    for cat in NAMED_AMENITY_CATEGORIES:
         data = infrastructure.get(cat)
         if not data or data["status"] != "ok" or "items" not in data:
             continue
@@ -331,7 +348,7 @@ def _render_map(area, wards_gdf, map_id):
                 )
             else:
                 # Amenities flagged flood_risk (within RIVER_RISK_BUFFER_M of a river)
-                # are colored differently from ordinary schools/hospitals/emergency points.
+                # are colored differently from ordinary amenity points.
                 color = "#ef6c00" if item.get("flood_risk") else "#c62828"
                 tooltip = item["name"] + \
                     (f" (within {RIVER_RISK_BUFFER_M}m of a river)" if item.get(
